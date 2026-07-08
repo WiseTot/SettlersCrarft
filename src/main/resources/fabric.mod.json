@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "settlerscraft",
+  "version": "${version}",
+  "name": "SettlersCraft",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/settlerscraft/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "fabric-datagen": [
+      "com.nxtlinea.settlerscraft.client.SettlerscraftDataGenerator"
+    ],
+    "client": [
+      "com.nxtlinea.settlerscraft.client.SettlerscraftClient"
+    ],
+    "main": [
+      "com.nxtlinea.settlerscraft.Settlerscraft"
+    ]
+  },
+  "mixins": [
+    "settlerscraft.mixins.json",
+    {
+      "config": "settlerscraft.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
