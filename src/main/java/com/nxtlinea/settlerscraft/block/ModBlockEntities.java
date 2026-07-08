@@ -1,6 +1,8 @@
 package com.nxtlinea.settlerscraft.block;
 
 import com.nxtlinea.settlerscraft.Settlerscraft;
+import com.nxtlinea.settlerscraft.building.StorageManager;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerBlockEntityEvents;
 import net.fabricmc.fabric.api.object.builder.v1.block.entity.FabricBlockEntityTypeBuilder;
 import net.minecraft.block.entity.BlockEntityType;
 import net.minecraft.registry.Registries;
@@ -17,5 +19,11 @@ public class ModBlockEntities {
 
     public static void register() {
         Settlerscraft.LOGGER.info("Registering block entities for " + Settlerscraft.MOD_ID);
+
+        ServerBlockEntityEvents.BLOCK_ENTITY_LOAD.register((blockEntity, world) -> {
+            if (blockEntity instanceof StorageBlockEntity) {
+                StorageManager.register(blockEntity.getPos());
+            }
+        });
     }
 }

@@ -16,6 +16,7 @@ import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.mob.PathAwareEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.LocalDifficulty;
@@ -24,7 +25,12 @@ import net.minecraft.world.World;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class SettlerEntity extends PathAwareEntity {
 
@@ -33,7 +39,9 @@ public class SettlerEntity extends PathAwareEntity {
     private static final int BUILD_STEP_DELAY_TICKS = 10;
     private static final int NO_STORAGE_RETRY_TICKS = 60;
     private static final int NO_MATERIAL_RETRY_TICKS = 60;
-    private static final int CARRY_CAPACITY = 16;
+
+    private static final int CARRY_CAPACITY_PER_TYPE = 32;
+    private static final int MAX_CARRIED_TYPES = 5;
 
     private SettlerState state = SettlerState.IDLE;
     private SettlerWalkPurpose walkPurpose = SettlerWalkPurpose.WANDER;
@@ -43,8 +51,10 @@ public class SettlerEntity extends PathAwareEntity {
     private List<BlueprintData.BlockPlacement> currentBuildQueue = null;
 
     private BlockPos storageTarget = null;
-    private Item carriedItem = null;
-    private int carriedCount = 0;
+
+    private final Map<Item, Integer> carriedItems = new LinkedHashMap<>();
+
+    private boolean returningExcess = false;
 
     public SettlerEntity(EntityType<? extends PathAwareEntity> entityType, World world) {
         super(entityType, world);
@@ -82,9 +92,7 @@ public class SettlerEntity extends PathAwareEntity {
             if (pendingSite != null && ModBlueprints.STARTER_HOUSE != null) {
                 this.buildOrigin = pendingSite;
                 this.currentBuildQueue = new ArrayList<>(ModBlueprints.STARTER_HOUSE.getPlacements());
-                this.carriedItem = null;
-                this.carriedCount = 0;
-                // не двигаемся в этом тике, следующий вызов handleIdle разберётся, что делать дальше
+                this.carriedItems.clear();
                 return;
             }
 
@@ -93,16 +101,19 @@ public class SettlerEntity extends PathAwareEntity {
         }
 
         if (this.currentBuildQueue.isEmpty()) {
+            if (!this.carriedItems.isEmpty()) {
+                goToStorage(true);
+                return;
+            }
+
             this.buildOrigin = null;
             this.currentBuildQueue = null;
-            this.carriedItem = null;
-            this.carriedCount = 0;
             return;
         }
 
         Item neededItem = this.currentBuildQueue.get(0).state().getBlock().asItem();
 
-        if (this.carriedItem == neededItem && this.carriedCount > 0) {
+        if (this.carriedItems.getOrDefault(neededItem, 0) > 0) {
             this.walkPurpose = SettlerWalkPurpose.TO_SITE;
             this.getNavigation().startMovingTo(
                     this.buildOrigin.getX() + 0.5, this.buildOrigin.getY(), this.buildOrigin.getZ() + 0.5, 0.6D
@@ -111,6 +122,10 @@ public class SettlerEntity extends PathAwareEntity {
             return;
         }
 
+        goToStorage(false);
+    }
+
+    private void goToStorage(boolean toDeposit) {
         BlockPos nearestStorage = StorageManager.findNearest(this.getWorld(), this.getBlockPos());
 
         if (nearestStorage == null) {
@@ -120,6 +135,7 @@ public class SettlerEntity extends PathAwareEntity {
         }
 
         this.storageTarget = nearestStorage;
+        this.returningExcess = toDeposit;
         this.walkPurpose = SettlerWalkPurpose.TO_STORAGE;
         this.getNavigation().startMovingTo(
                 nearestStorage.getX() + 0.5, nearestStorage.getY(), nearestStorage.getZ() + 0.5, 0.6D
@@ -153,39 +169,87 @@ public class SettlerEntity extends PathAwareEntity {
     private void handleGathering() {
         BlockEntity blockEntity = this.storageTarget != null ? this.getWorld().getBlockEntity(this.storageTarget) : null;
 
-        if (!(blockEntity instanceof StorageBlockEntity storage) || this.currentBuildQueue == null || this.currentBuildQueue.isEmpty()) {
+        if (!(blockEntity instanceof StorageBlockEntity storage)) {
             this.waitTicksRemaining = NO_STORAGE_RETRY_TICKS;
             this.state = SettlerState.WAITING;
             return;
         }
 
-        Item neededItem = this.currentBuildQueue.get(0).state().getBlock().asItem();
-        int neededCount = countLeadingSameType(this.currentBuildQueue, neededItem, CARRY_CAPACITY);
-
-        int extracted = storage.extractItem(neededItem, neededCount);
-
-        if (extracted > 0) {
-            this.carriedItem = neededItem;
-            this.carriedCount = extracted;
+        if (this.returningExcess) {
+            depositAllCarriedItems(storage);
+            this.returningExcess = false;
             this.waitTicksRemaining = 5;
-        } else {
-            this.waitTicksRemaining = NO_MATERIAL_RETRY_TICKS;
+            this.state = SettlerState.WAITING;
+            return;
         }
 
+        if (this.currentBuildQueue == null || this.currentBuildQueue.isEmpty()) {
+            this.waitTicksRemaining = NO_STORAGE_RETRY_TICKS;
+            this.state = SettlerState.WAITING;
+            return;
+        }
+
+        Set<Item> typesToFetch = new LinkedHashSet<>();
+
+        for (BlueprintData.BlockPlacement placement : this.currentBuildQueue) {
+            Item item = placement.state().getBlock().asItem();
+
+            if (this.carriedItems.getOrDefault(item, 0) > 0) {
+                continue;
+            }
+
+            typesToFetch.add(item);
+
+            if (this.carriedItems.size() + typesToFetch.size() >= MAX_CARRIED_TYPES) {
+                break;
+            }
+        }
+
+        boolean gotAnything = false;
+
+        for (Item item : typesToFetch) {
+            int extracted = storage.extractItem(item, CARRY_CAPACITY_PER_TYPE);
+            if (extracted > 0) {
+                this.carriedItems.merge(item, extracted, Integer::sum);
+                gotAnything = true;
+            }
+        }
+
+        this.waitTicksRemaining = gotAnything ? 5 : NO_MATERIAL_RETRY_TICKS;
         this.state = SettlerState.WAITING;
     }
 
+    private void depositAllCarriedItems(StorageBlockEntity storage) {
+        Iterator<Map.Entry<Item, Integer>> iterator = this.carriedItems.entrySet().iterator();
+
+        while (iterator.hasNext()) {
+            Map.Entry<Item, Integer> entry = iterator.next();
+            ItemStack leftover = storage.insertStack(new ItemStack(entry.getKey(), entry.getValue()));
+
+            if (leftover.isEmpty()) {
+                iterator.remove();
+            } else {
+                entry.setValue(leftover.getCount());
+            }
+        }
+    }
+
     private void handleBuilding() {
-        if (this.currentBuildQueue != null && !this.currentBuildQueue.isEmpty()
-                && this.carriedItem != null && this.carriedCount > 0) {
-
+        if (this.currentBuildQueue != null && !this.currentBuildQueue.isEmpty()) {
             BlueprintData.BlockPlacement next = this.currentBuildQueue.get(0);
+            Item neededItem = next.state().getBlock().asItem();
+            int have = this.carriedItems.getOrDefault(neededItem, 0);
 
-            if (next.state().getBlock().asItem() == this.carriedItem) {
+            if (have > 0) {
                 BlockPos worldPos = this.buildOrigin.add(next.relativePos());
                 this.getWorld().setBlockState(worldPos, next.state());
                 this.currentBuildQueue.remove(0);
-                this.carriedCount--;
+
+                if (have - 1 <= 0) {
+                    this.carriedItems.remove(neededItem);
+                } else {
+                    this.carriedItems.put(neededItem, have - 1);
+                }
             }
         }
 
@@ -199,24 +263,6 @@ public class SettlerEntity extends PathAwareEntity {
             return;
         }
         this.state = SettlerState.IDLE;
-    }
-
-    /**
-     * Считает, сколько предметов данного типа идёт подряд с начала очереди построения
-     * (не более cap) — именно столько имеет смысл принести за одну ходку.
-     */
-    private int countLeadingSameType(List<BlueprintData.BlockPlacement> queue, Item item, int cap) {
-        int count = 0;
-        for (BlueprintData.BlockPlacement placement : queue) {
-            if (placement.state().getBlock().asItem() != item) {
-                break;
-            }
-            count++;
-            if (count >= cap) {
-                break;
-            }
-        }
-        return count;
     }
 
     public static DefaultAttributeContainer.Builder createSettlerAttributes() {
