@@ -10,15 +10,17 @@ import net.minecraft.util.Identifier;
 
 public class ModScreenHandlers {
 
-    public static final ScreenHandlerType<GenericContainerScreenHandler> STORAGE_SCREEN_HANDLER = Registry.register(
-            Registries.SCREEN_HANDLER,
-            new Identifier(Settlerscraft.MOD_ID, "storage"),
-            new ScreenHandlerType<>((syncId, playerInventory) -> new GenericContainerScreenHandler(
-                    STORAGE_SCREEN_HANDLER, syncId, playerInventory, new SimpleInventory(27), 3
-            ))
-    );
+    public static ScreenHandlerType<GenericContainerScreenHandler> STORAGE_SCREEN_HANDLER;
 
     public static void register() {
+        STORAGE_SCREEN_HANDLER = Registry.register(
+                Registries.SCREEN_HANDLER,
+                new Identifier(Settlerscraft.MOD_ID, "storage"),
+                new ScreenHandlerType<>((syncId, playerInventory) -> new GenericContainerScreenHandler(
+                        STORAGE_SCREEN_HANDLER, syncId, playerInventory, new SimpleInventory(27), 3
+                ))
+        );
+
         Settlerscraft.LOGGER.info("Registering screen handlers for " + Settlerscraft.MOD_ID);
     }
 }

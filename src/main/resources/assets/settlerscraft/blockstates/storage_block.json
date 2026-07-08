@@ -1,0 +1,5 @@
+{
+  "variants": {
+    "": { "model": "settlerscraft:block/storage_block" }
+  }
+}
