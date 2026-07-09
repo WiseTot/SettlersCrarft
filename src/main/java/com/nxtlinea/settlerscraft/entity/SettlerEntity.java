@@ -7,17 +7,23 @@ import com.nxtlinea.settlerscraft.building.ModBlueprints;
 import com.nxtlinea.settlerscraft.building.StorageManager;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.EntityType;
+import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.SpawnReason;
 import net.minecraft.entity.ai.goal.LookAroundGoal;
 import net.minecraft.entity.ai.goal.LookAtEntityGoal;
 import net.minecraft.entity.attribute.DefaultAttributeContainer;
 import net.minecraft.entity.attribute.EntityAttributes;
+import net.minecraft.entity.data.DataTracker;
+import net.minecraft.entity.data.TrackedData;
+import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import net.minecraft.entity.mob.MobEntity;
 import net.minecraft.entity.mob.PathAwareEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.sound.SoundCategory;
+import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.LocalDifficulty;
 import net.minecraft.world.ServerWorldAccess;
@@ -43,6 +49,9 @@ public class SettlerEntity extends PathAwareEntity {
     private static final int CARRY_CAPACITY_PER_TYPE = 32;
     private static final int MAX_CARRIED_TYPES = 5;
 
+    private static final TrackedData<ItemStack> MISSING_ITEM =
+            DataTracker.registerData(SettlerEntity.class, TrackedDataHandlerRegistry.ITEM_STACK);
+
     private SettlerState state = SettlerState.IDLE;
     private SettlerWalkPurpose walkPurpose = SettlerWalkPurpose.WANDER;
     private int waitTicksRemaining = 0;
@@ -58,6 +67,26 @@ public class SettlerEntity extends PathAwareEntity {
 
     public SettlerEntity(EntityType<? extends PathAwareEntity> entityType, World world) {
         super(entityType, world);
+    }
+
+    @Override
+    protected void initDataTracker() {
+        super.initDataTracker();
+        this.dataTracker.startTracking(MISSING_ITEM, ItemStack.EMPTY);
+    }
+
+    public ItemStack getMissingItem() {
+        return this.dataTracker.get(MISSING_ITEM);
+    }
+
+    private void setMissingItem(Item item) {
+        this.dataTracker.set(MISSING_ITEM, new ItemStack(item));
+    }
+
+    private void clearMissingItem() {
+        if (!this.dataTracker.get(MISSING_ITEM).isEmpty()) {
+            this.dataTracker.set(MISSING_ITEM, ItemStack.EMPTY);
+        }
     }
 
     @Override
@@ -108,12 +137,16 @@ public class SettlerEntity extends PathAwareEntity {
 
             this.buildOrigin = null;
             this.currentBuildQueue = null;
+            clearMissingItem();
             return;
         }
 
         Item neededItem = this.currentBuildQueue.get(0).state().getBlock().asItem();
 
         if (this.carriedItems.getOrDefault(neededItem, 0) > 0) {
+            this.equipStack(EquipmentSlot.MAINHAND, new ItemStack(neededItem));
+            clearMissingItem();
+
             this.walkPurpose = SettlerWalkPurpose.TO_SITE;
             this.getNavigation().startMovingTo(
                     this.buildOrigin.getX() + 0.5, this.buildOrigin.getY(), this.buildOrigin.getZ() + 0.5, 0.6D
@@ -129,10 +162,15 @@ public class SettlerEntity extends PathAwareEntity {
         BlockPos nearestStorage = StorageManager.findNearest(this.getWorld(), this.getBlockPos());
 
         if (nearestStorage == null) {
+            if (!toDeposit && this.currentBuildQueue != null && !this.currentBuildQueue.isEmpty()) {
+                setMissingItem(this.currentBuildQueue.get(0).state().getBlock().asItem());
+            }
             this.waitTicksRemaining = NO_STORAGE_RETRY_TICKS;
             this.state = SettlerState.WAITING;
             return;
         }
+
+        this.equipStack(EquipmentSlot.MAINHAND, ItemStack.EMPTY);
 
         this.storageTarget = nearestStorage;
         this.returningExcess = toDeposit;
@@ -144,6 +182,9 @@ public class SettlerEntity extends PathAwareEntity {
     }
 
     private void startWandering() {
+        this.equipStack(EquipmentSlot.MAINHAND, ItemStack.EMPTY);
+        clearMissingItem();
+
         double offsetX = (this.random.nextDouble() * 2.0 - 1.0) * WANDER_RADIUS;
         double offsetZ = (this.random.nextDouble() * 2.0 - 1.0) * WANDER_RADIUS;
         this.getNavigation().startMovingTo(this.getX() + offsetX, this.getY(), this.getZ() + offsetZ, 0.6D);
@@ -189,8 +230,9 @@ public class SettlerEntity extends PathAwareEntity {
             return;
         }
 
-        Set<Item> typesToFetch = new LinkedHashSet<>();
+        Item primaryNeeded = this.currentBuildQueue.get(0).state().getBlock().asItem();
 
+        Set<Item> typesToFetch = new LinkedHashSet<>();
         for (BlueprintData.BlockPlacement placement : this.currentBuildQueue) {
             Item item = placement.state().getBlock().asItem();
 
@@ -205,17 +247,21 @@ public class SettlerEntity extends PathAwareEntity {
             }
         }
 
-        boolean gotAnything = false;
-
         for (Item item : typesToFetch) {
             int extracted = storage.extractItem(item, CARRY_CAPACITY_PER_TYPE);
             if (extracted > 0) {
                 this.carriedItems.merge(item, extracted, Integer::sum);
-                gotAnything = true;
             }
         }
 
-        this.waitTicksRemaining = gotAnything ? 5 : NO_MATERIAL_RETRY_TICKS;
+        if (this.carriedItems.getOrDefault(primaryNeeded, 0) > 0) {
+            clearMissingItem();
+            this.waitTicksRemaining = 5;
+        } else {
+            setMissingItem(primaryNeeded);
+            this.waitTicksRemaining = NO_MATERIAL_RETRY_TICKS;
+        }
+
         this.state = SettlerState.WAITING;
     }
 
@@ -242,6 +288,15 @@ public class SettlerEntity extends PathAwareEntity {
 
             if (have > 0) {
                 BlockPos worldPos = this.buildOrigin.add(next.relativePos());
+
+                this.getLookControl().lookAt(worldPos.getX() + 0.5, worldPos.getY() + 0.5, worldPos.getZ() + 0.5, 30.0F, 30.0F);
+                this.equipStack(EquipmentSlot.MAINHAND, new ItemStack(neededItem));
+                this.swingHand(Hand.MAIN_HAND);
+                this.getWorld().playSound(
+                        null, worldPos, next.state().getSoundGroup().getPlaceSound(),
+                        SoundCategory.BLOCKS, 1.0F, 1.0F
+                );
+
                 this.getWorld().setBlockState(worldPos, next.state());
                 this.currentBuildQueue.remove(0);
 
@@ -250,6 +305,8 @@ public class SettlerEntity extends PathAwareEntity {
                 } else {
                     this.carriedItems.put(neededItem, have - 1);
                 }
+
+                clearMissingItem();
             }
         }
 
