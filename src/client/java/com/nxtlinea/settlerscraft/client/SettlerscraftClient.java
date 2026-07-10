@@ -6,11 +6,13 @@ import com.nxtlinea.settlerscraft.screen.ModScreenHandlers;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry;
 import net.minecraft.client.gui.screen.ingame.HandledScreens;
+import net.minecraft.client.render.VertexConsumerProvider;
 import net.minecraft.client.render.entity.EntityRendererFactory;
 import net.minecraft.client.render.entity.MobEntityRenderer;
 import net.minecraft.client.render.entity.feature.HeldItemFeatureRenderer;
 import net.minecraft.client.render.entity.model.BipedEntityModel;
 import net.minecraft.client.render.entity.model.EntityModelLayers;
+import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.Identifier;
 
 public class SettlerscraftClient implements ClientModInitializer {
@@ -27,7 +29,12 @@ public class SettlerscraftClient implements ClientModInitializer {
         public SettlerEntityRenderer(EntityRendererFactory.Context context) {
             super(context, new BipedEntityModel<>(context.getPart(EntityModelLayers.PLAYER)), 0.5f);
             this.addFeature(new HeldItemFeatureRenderer<>(this, context.getHeldItemRenderer()));
-            this.addFeature(new MissingMaterialFeatureRenderer(this));
+        }
+
+        @Override
+        public void render(SettlerEntity entity, float yaw, float tickDelta, MatrixStack matrices, VertexConsumerProvider vertexConsumers, int light) {
+            super.render(entity, yaw, tickDelta, matrices, vertexConsumers, light);
+            MissingMaterialIconRenderer.render(entity, matrices, vertexConsumers, light);
         }
 
         @Override
