@@ -175,10 +175,29 @@ public class SettlerEntity extends PathAwareEntity {
         this.storageTarget = nearestStorage;
         this.returningExcess = toDeposit;
         this.walkPurpose = SettlerWalkPurpose.TO_STORAGE;
+
+        BlockPos standingSpot = findStandingSpotNear(nearestStorage);
         this.getNavigation().startMovingTo(
-                nearestStorage.getX() + 0.5, nearestStorage.getY(), nearestStorage.getZ() + 0.5, 0.6D
+                standingSpot.getX() + 0.5, standingSpot.getY(), standingSpot.getZ() + 0.5, 0.6D
         );
         this.state = SettlerState.WALKING;
+    }
+
+    private BlockPos findStandingSpotNear(BlockPos targetPos) {
+        BlockPos[] candidates = {
+                targetPos.north(), targetPos.south(), targetPos.east(), targetPos.west()
+        };
+
+        for (BlockPos candidate : candidates) {
+            boolean spotIsOpen = this.getWorld().getBlockState(candidate).isAir();
+            boolean groundIsSolid = !this.getWorld().getBlockState(candidate.down()).isAir();
+
+            if (spotIsOpen && groundIsSolid) {
+                return candidate;
+            }
+        }
+
+        return targetPos; // ничего не нашли — попробуем как раньше
     }
 
     private void startWandering() {
@@ -192,6 +211,8 @@ public class SettlerEntity extends PathAwareEntity {
         this.state = SettlerState.WALKING;
     }
 
+    private static final double ARRIVAL_DISTANCE_SQ = 4.0; // ~2 блока
+
     private void handleWalking() {
         if (!this.getNavigation().isIdle()) {
             return;
@@ -202,8 +223,24 @@ public class SettlerEntity extends PathAwareEntity {
                 this.waitTicksRemaining = WANDER_WAIT_TICKS;
                 this.state = SettlerState.WAITING;
             }
-            case TO_STORAGE -> this.state = SettlerState.GATHERING;
-            case TO_SITE -> this.state = SettlerState.BUILDING;
+            case TO_STORAGE -> {
+                if (this.storageTarget != null && this.getBlockPos().getSquaredDistance(this.storageTarget) > ARRIVAL_DISTANCE_SQ) {
+                    this.getNavigation().startMovingTo(
+                            this.storageTarget.getX() + 0.5, this.storageTarget.getY(), this.storageTarget.getZ() + 0.5, 0.6D
+                    );
+                    return;
+                }
+                this.state = SettlerState.GATHERING;
+            }
+            case TO_SITE -> {
+                if (this.buildOrigin != null && this.getBlockPos().getSquaredDistance(this.buildOrigin) > ARRIVAL_DISTANCE_SQ) {
+                    this.getNavigation().startMovingTo(
+                            this.buildOrigin.getX() + 0.5, this.buildOrigin.getY(), this.buildOrigin.getZ() + 0.5, 0.6D
+                    );
+                    return;
+                }
+                this.state = SettlerState.BUILDING;
+            }
         }
     }
 
@@ -326,7 +363,7 @@ public class SettlerEntity extends PathAwareEntity {
         return MobEntity.createMobAttributes()
                 .add(EntityAttributes.GENERIC_MAX_HEALTH, 20.0D)
                 .add(EntityAttributes.GENERIC_MOVEMENT_SPEED, 0.35D)
-                .add(EntityAttributes.GENERIC_FOLLOW_RANGE, 16.0D);
+                .add(EntityAttributes.GENERIC_FOLLOW_RANGE, 48.0D);
     }
 
     @Nullable
