@@ -14,6 +14,12 @@ public class ModItems {
             new SurveyorWandItem(new Item.Settings().maxCount(1))
     );
 
+    public static final Item ROAD_WAND = Registry.register(
+            Registries.ITEM,
+            new Identifier(Settlerscraft.MOD_ID, "road_wand"),
+            new RoadWandItem(new Item.Settings().maxCount(1))
+    );
+
     public static void register() {
         Settlerscraft.LOGGER.info("Registering items for " + Settlerscraft.MOD_ID);
     }

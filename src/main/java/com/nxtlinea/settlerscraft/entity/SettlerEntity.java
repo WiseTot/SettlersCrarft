@@ -4,7 +4,9 @@ import com.nxtlinea.settlerscraft.block.StorageBlockEntity;
 import com.nxtlinea.settlerscraft.building.BlueprintData;
 import com.nxtlinea.settlerscraft.building.ConstructionManager;
 import com.nxtlinea.settlerscraft.building.ModBlueprints;
+import com.nxtlinea.settlerscraft.building.RoadManager;
 import com.nxtlinea.settlerscraft.building.StorageManager;
+import net.minecraft.block.Blocks;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.EquipmentSlot;
@@ -46,7 +48,7 @@ public class SettlerEntity extends PathAwareEntity {
     private static final int NO_STORAGE_RETRY_TICKS = 60;
     private static final int NO_MATERIAL_RETRY_TICKS = 60;
 
-    private static final int CARRY_CAPACITY_PER_TYPE = 32;
+    private static final int CARRY_CAPACITY_PER_TYPE = 64;
     private static final int MAX_CARRIED_TYPES = 5;
 
     private static final TrackedData<ItemStack> MISSING_ITEM =
@@ -125,6 +127,18 @@ public class SettlerEntity extends PathAwareEntity {
                 return;
             }
 
+            List<BlockPos> pendingRoad = RoadManager.pollNextRoad();
+
+            if (pendingRoad != null) {
+                this.buildOrigin = BlockPos.ORIGIN;
+                this.currentBuildQueue = new ArrayList<>();
+                for (BlockPos pos : pendingRoad) {
+                    this.currentBuildQueue.add(new BlueprintData.BlockPlacement(pos, Blocks.COBBLESTONE.getDefaultState()));
+                }
+                this.carriedItems.clear();
+                return;
+            }
+
             startWandering();
             return;
         }
@@ -147,9 +161,10 @@ public class SettlerEntity extends PathAwareEntity {
             this.equipStack(EquipmentSlot.MAINHAND, new ItemStack(neededItem));
             clearMissingItem();
 
+            BlockPos nextBlockPos = this.buildOrigin.add(this.currentBuildQueue.get(0).relativePos());
             this.walkPurpose = SettlerWalkPurpose.TO_SITE;
             this.getNavigation().startMovingTo(
-                    this.buildOrigin.getX() + 0.5, this.buildOrigin.getY(), this.buildOrigin.getZ() + 0.5, 0.6D
+                    nextBlockPos.getX() + 0.5, nextBlockPos.getY(), nextBlockPos.getZ() + 0.5, 0.6D
             );
             this.state = SettlerState.WALKING;
             return;
@@ -233,9 +248,13 @@ public class SettlerEntity extends PathAwareEntity {
                 this.state = SettlerState.GATHERING;
             }
             case TO_SITE -> {
-                if (this.buildOrigin != null && this.getBlockPos().getSquaredDistance(this.buildOrigin) > ARRIVAL_DISTANCE_SQ) {
+                BlockPos nextBlockPos = (this.buildOrigin != null && this.currentBuildQueue != null && !this.currentBuildQueue.isEmpty())
+                        ? this.buildOrigin.add(this.currentBuildQueue.get(0).relativePos())
+                        : null;
+
+                if (nextBlockPos != null && this.getBlockPos().getSquaredDistance(nextBlockPos) > ARRIVAL_DISTANCE_SQ) {
                     this.getNavigation().startMovingTo(
-                            this.buildOrigin.getX() + 0.5, this.buildOrigin.getY(), this.buildOrigin.getZ() + 0.5, 0.6D
+                            nextBlockPos.getX() + 0.5, nextBlockPos.getY(), nextBlockPos.getZ() + 0.5, 0.6D
                     );
                     return;
                 }
