@@ -6,6 +6,7 @@ import com.nxtlinea.settlerscraft.building.ConstructionManager;
 import com.nxtlinea.settlerscraft.building.ModBlueprints;
 import com.nxtlinea.settlerscraft.building.RoadManager;
 import com.nxtlinea.settlerscraft.building.StorageManager;
+import com.nxtlinea.settlerscraft.entity.profession.ProfessionBehavior;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.EntityType;
@@ -25,6 +26,7 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.sound.SoundCategory;
+import net.minecraft.text.Text;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.LocalDifficulty;
@@ -51,6 +53,9 @@ public class SettlerEntity extends PathAwareEntity {
     private static final int CARRY_CAPACITY_PER_TYPE = 64;
     private static final int MAX_CARRIED_TYPES = 5;
 
+    private static final double ARRIVAL_DISTANCE_SQ = 4.0; // ~2 блока
+    private static final double WORK_REACH_DISTANCE_SQ = 36.0; // ~6 блоков — условная "длина руки" для работы (рубка и т.д.)
+
     private static final TrackedData<ItemStack> MISSING_ITEM =
             DataTracker.registerData(SettlerEntity.class, TrackedDataHandlerRegistry.ITEM_STACK);
 
@@ -67,6 +72,9 @@ public class SettlerEntity extends PathAwareEntity {
 
     private boolean returningExcess = false;
 
+    private Profession profession = Profession.NONE;
+    private List<BlockPos> workQueue = null;
+
     public SettlerEntity(EntityType<? extends PathAwareEntity> entityType, World world) {
         super(entityType, world);
     }
@@ -79,6 +87,10 @@ public class SettlerEntity extends PathAwareEntity {
 
     public ItemStack getMissingItem() {
         return this.dataTracker.get(MISSING_ITEM);
+    }
+
+    public Profession getProfession() {
+        return this.profession;
     }
 
     private void setMissingItem(Item item) {
@@ -112,6 +124,7 @@ public class SettlerEntity extends PathAwareEntity {
             case WALKING -> handleWalking();
             case GATHERING -> handleGathering();
             case BUILDING -> handleBuilding();
+            case WORKING -> handleWorking();
             case WAITING -> handleWaiting();
         }
     }
@@ -136,6 +149,11 @@ public class SettlerEntity extends PathAwareEntity {
                     this.currentBuildQueue.add(new BlueprintData.BlockPlacement(pos, Blocks.COBBLESTONE.getDefaultState()));
                 }
                 this.carriedItems.clear();
+                return;
+            }
+
+            ProfessionBehavior behavior = this.profession.getBehavior();
+            if (behavior != null && behavior.tryStartWork(this)) {
                 return;
             }
 
@@ -226,8 +244,6 @@ public class SettlerEntity extends PathAwareEntity {
         this.state = SettlerState.WALKING;
     }
 
-    private static final double ARRIVAL_DISTANCE_SQ = 4.0; // ~2 блока
-
     private void handleWalking() {
         if (!this.getNavigation().isIdle()) {
             return;
@@ -259,6 +275,17 @@ public class SettlerEntity extends PathAwareEntity {
                     return;
                 }
                 this.state = SettlerState.BUILDING;
+            }
+            case TO_WORK_SITE -> {
+                BlockPos target = (this.workQueue != null && !this.workQueue.isEmpty()) ? this.workQueue.get(0) : null;
+
+                if (target != null && this.getBlockPos().getSquaredDistance(target) > WORK_REACH_DISTANCE_SQ) {
+                    if (this.getNavigation().isIdle()) {
+                        this.getNavigation().startMovingTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5, 0.6D);
+                    }
+                    return;
+                }
+                this.state = SettlerState.WORKING;
             }
         }
     }
@@ -370,6 +397,17 @@ public class SettlerEntity extends PathAwareEntity {
         this.state = SettlerState.WAITING;
     }
 
+    private void handleWorking() {
+        ProfessionBehavior behavior = this.profession.getBehavior();
+
+        if (behavior != null) {
+            behavior.performWorkAction(this);
+        } else {
+            this.waitTicksRemaining = WANDER_WAIT_TICKS;
+            this.state = SettlerState.WAITING;
+        }
+    }
+
     private void handleWaiting() {
         this.waitTicksRemaining--;
         if (this.waitTicksRemaining > 0) {
@@ -377,6 +415,52 @@ public class SettlerEntity extends PathAwareEntity {
         }
         this.state = SettlerState.IDLE;
     }
+
+    // ------------------------------------------------------------------
+    // Публичный API для классов профессий (com.nxtlinea.settlerscraft.entity.profession.*)
+    // ------------------------------------------------------------------
+
+    public List<BlockPos> getWorkQueue() {
+        return this.workQueue;
+    }
+
+    public void setWorkQueue(List<BlockPos> workQueue) {
+        this.workQueue = workQueue;
+    }
+
+    public Map<Item, Integer> getCarriedItems() {
+        return this.carriedItems;
+    }
+
+    public void addCarriedItem(Item item, int amount) {
+        this.carriedItems.merge(item, amount, Integer::sum);
+    }
+
+    public void returnCarriedItemsToStorage() {
+        goToStorage(true);
+    }
+
+    public void startWalkingToWorkSite(BlockPos pos) {
+        this.walkPurpose = SettlerWalkPurpose.TO_WORK_SITE;
+        this.getNavigation().startMovingTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, 0.6D);
+        this.state = SettlerState.WALKING;
+    }
+
+    public void waitFor(int ticks) {
+        this.waitTicksRemaining = ticks;
+        this.state = SettlerState.WAITING;
+    }
+
+    public void lookAtAndSwing(BlockPos pos) {
+        this.getLookControl().lookAt(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, 30.0F, 30.0F);
+        this.swingHand(Hand.MAIN_HAND);
+    }
+
+    public void equipItem(Item item) {
+        this.equipStack(EquipmentSlot.MAINHAND, new ItemStack(item));
+    }
+
+    // ------------------------------------------------------------------
 
     public static DefaultAttributeContainer.Builder createSettlerAttributes() {
         return MobEntity.createMobAttributes()
@@ -388,6 +472,19 @@ public class SettlerEntity extends PathAwareEntity {
     @Nullable
     @Override
     public net.minecraft.entity.EntityData initialize(ServerWorldAccess world, LocalDifficulty difficulty, SpawnReason spawnReason, @Nullable net.minecraft.entity.EntityData entityData, @Nullable NbtCompound entityNbt) {
-        return super.initialize(world, difficulty, spawnReason, entityData, entityNbt);
+        net.minecraft.entity.EntityData result = super.initialize(world, difficulty, spawnReason, entityData, entityNbt);
+
+        Profession[] values = Profession.values();
+        this.profession = values[this.random.nextInt(values.length)];
+
+        if (this.profession.getDisplayName() != null) {
+            this.setCustomName(Text.literal(this.profession.getDisplayName()));
+            this.setCustomNameVisible(true);
+        } else {
+            this.setCustomName(null);
+            this.setCustomNameVisible(false);
+        }
+
+        return result;
     }
 }
