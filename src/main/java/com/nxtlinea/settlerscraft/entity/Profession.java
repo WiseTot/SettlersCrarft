@@ -1,11 +1,13 @@
 package com.nxtlinea.settlerscraft.entity;
 
 import com.nxtlinea.settlerscraft.entity.profession.LumberjackBehavior;
+import com.nxtlinea.settlerscraft.entity.profession.MinerBehavior;
 import com.nxtlinea.settlerscraft.entity.profession.ProfessionBehavior;
 
 public enum Profession {
     NONE(null, null),
-    LUMBERJACK(new LumberjackBehavior(), "Lumber");
+    LUMBERJACK(new LumberjackBehavior(), "Lumber"),
+    MINER(new MinerBehavior(), "Miner");
 
     private final ProfessionBehavior behavior;
     private final String displayName;

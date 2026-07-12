@@ -25,6 +25,7 @@ public class LumberjackBehavior implements ProfessionBehavior {
     private static final int WORK_STEP_DELAY_TICKS = 10;
     private static final int NO_TREE_ANYWHERE_WAIT_TICKS = 60;
     private static final double RETURN_TO_ZONE_DISTANCE_SQ = 225.0; // ~15 блоков
+    private static final float CHOP_SPEED_MULTIPLIER = 1.0F; // рубит голыми руками, как игрок без топора
 
     private final Map<UUID, PendingPlant> pendingPlants = new HashMap<>();
     private final Map<UUID, BlockPos> lastTreeZone = new HashMap<>();
@@ -67,14 +68,12 @@ public class LumberjackBehavior implements ProfessionBehavior {
             return true;
         }
 
-        // Рядом дерева нет. Если помним лесную зону и сейчас от неё далеко — сходим обратно туда
         BlockPos zone = lastTreeZone.get(settler.getUuid());
         if (zone != null && settler.getBlockPos().getSquaredDistance(zone) > RETURN_TO_ZONE_DISTANCE_SQ) {
-            settler.startWalkingToWorkSite(zone); // workQueue уже null — значит это просто переход, не рубка
+            settler.startWalkingToWorkSite(zone);
             return true;
         }
 
-        // Мы либо уже в этой зоне и там пусто, либо зоны не знаем вовсе — забываем её и бродим
         lastTreeZone.remove(settler.getUuid());
         return false;
     }
@@ -84,36 +83,40 @@ public class LumberjackBehavior implements ProfessionBehavior {
         List<BlockPos> queue = settler.getWorkQueue();
 
         if (queue == null) {
-            // Пришли не рубить, а просто вернулись в лесную зону — пробуем найти дерево уже отсюда
             if (!tryStartWork(settler)) {
                 settler.waitFor(NO_TREE_ANYWHERE_WAIT_TICKS);
             }
             return;
         }
 
-        if (!queue.isEmpty()) {
-            BlockPos pos = queue.get(0);
-            World world = settler.getWorld();
-            BlockState state = world.getBlockState(pos);
+        if (queue.isEmpty()) {
+            settler.waitFor(WORK_STEP_DELAY_TICKS);
+            return;
+        }
 
-            if (state.isIn(BlockTags.LOGS)) {
-                Item logItem = state.getBlock().asItem();
+        BlockPos pos = queue.get(0);
+        World world = settler.getWorld();
+        BlockState state = world.getBlockState(pos);
 
-                settler.lookAtAndSwing(pos);
-                settler.equipItem(logItem);
-                world.playSound(null, pos, state.getSoundGroup().getBreakSound(), SoundCategory.BLOCKS, 1.0F, 1.0F);
-                world.setBlockState(pos, Blocks.AIR.getDefaultState());
-                settler.addCarriedItem(logItem, 1);
-            }
+        if (!state.isIn(BlockTags.LOGS)) {
+            queue.remove(0);
+            return;
+        }
 
+        Item logItem = state.getBlock().asItem();
+        settler.equipItem(logItem);
+        boolean broken = settler.tickBreaking(pos, CHOP_SPEED_MULTIPLIER);
+
+        if (broken) {
+            world.playSound(null, pos, state.getSoundGroup().getBreakSound(), SoundCategory.BLOCKS, 1.0F, 1.0F);
+            world.setBlockState(pos, Blocks.AIR.getDefaultState());
+            settler.addCarriedItem(logItem, 1);
             queue.remove(0);
 
             if (queue.isEmpty()) {
                 plantSaplingIfPending(settler);
             }
         }
-
-        settler.waitFor(WORK_STEP_DELAY_TICKS);
     }
 
     private void plantSaplingIfPending(SettlerEntity settler) {
@@ -161,11 +164,11 @@ public class LumberjackBehavior implements ProfessionBehavior {
 
             BlockState below = settler.getWorld().getBlockState(pos.down());
             if (below.isIn(BlockTags.LOGS)) {
-                continue; // это не основание ствола
+                continue;
             }
 
             if (!hasNearbyLeaves(settler.getWorld(), pos.toImmutable())) {
-                continue; // рядом нет листвы — скорее всего это не дерево, а постройка
+                continue;
             }
 
             double distSq = origin.getSquaredDistance(pos);

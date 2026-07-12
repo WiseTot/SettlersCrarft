@@ -4,5 +4,6 @@ public enum SettlerWalkPurpose {
     WANDER,
     TO_STORAGE,
     TO_SITE,
-    TO_WORK_SITE
+    TO_WORK_SITE,
+    TO_WORK_SITE_CLOSE
 }

@@ -7,6 +7,7 @@ import com.nxtlinea.settlerscraft.building.ModBlueprints;
 import com.nxtlinea.settlerscraft.building.RoadManager;
 import com.nxtlinea.settlerscraft.building.StorageManager;
 import com.nxtlinea.settlerscraft.entity.profession.ProfessionBehavior;
+import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.EntityType;
@@ -74,6 +75,9 @@ public class SettlerEntity extends PathAwareEntity {
 
     private Profession profession = Profession.NONE;
     private List<BlockPos> workQueue = null;
+
+    private BlockPos breakingPos = null;
+    private float breakingProgress = 0f;
 
     public SettlerEntity(EntityType<? extends PathAwareEntity> entityType, World world) {
         super(entityType, world);
@@ -285,6 +289,17 @@ public class SettlerEntity extends PathAwareEntity {
                     }
                     return;
                 }
+                this.getNavigation().stop(); // важно: иначе старая попытка дойти "внутрь" блока остаётся висеть активной
+                this.state = SettlerState.WORKING;
+            }
+            case TO_WORK_SITE_CLOSE -> {
+                BlockPos target = (this.workQueue != null && !this.workQueue.isEmpty()) ? this.workQueue.get(0) : null;
+
+                if (target != null && this.getBlockPos().getSquaredDistance(target) > ARRIVAL_DISTANCE_SQ) {
+                    this.getNavigation().startMovingTo(target.getX() + 0.5, target.getY(), target.getZ() + 0.5, 0.6D);
+                    return;
+                }
+                this.getNavigation().stop();
                 this.state = SettlerState.WORKING;
             }
         }
@@ -446,6 +461,17 @@ public class SettlerEntity extends PathAwareEntity {
         this.state = SettlerState.WALKING;
     }
 
+    /**
+     * В отличие от startWalkingToWorkSite (которая считает точку достигнутой на расстоянии
+     * "вытянутой руки"), этот метод для случаев, когда жителю нужно физически дойти до места —
+     * например, спуститься по лестнице шахты, а не просто дотянуться до блока издалека.
+     */
+    public void startWalkingToCloseWorkSite(BlockPos pos) {
+        this.walkPurpose = SettlerWalkPurpose.TO_WORK_SITE_CLOSE;
+        this.getNavigation().startMovingTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, 0.6D);
+        this.state = SettlerState.WALKING;
+    }
+
     public void waitFor(int ticks) {
         this.waitTicksRemaining = ticks;
         this.state = SettlerState.WAITING;
@@ -458,6 +484,48 @@ public class SettlerEntity extends PathAwareEntity {
 
     public void equipItem(Item item) {
         this.equipStack(EquipmentSlot.MAINHAND, new ItemStack(item));
+    }
+
+    /**
+     * Физически ломает блок как игрок: смотрит на него, периодически взмахивает рукой,
+     * показывает нарастающие трещины (0-9 стадий) всем игрокам поблизости. Вызывать
+     * каждый тик, пока не вернёт true (блок полностью сломан — сам блок и предмет
+     * при этом НЕ трогаются, это остаётся на совести вызывающего кода).
+     */
+    public boolean tickBreaking(BlockPos pos, float speedMultiplier) {
+        this.getLookControl().lookAt(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, 30.0F, 30.0F);
+
+        if (!pos.equals(this.breakingPos)) {
+            this.breakingPos = pos;
+            this.breakingProgress = 0f;
+        }
+
+        if (this.age % 4 == 0) {
+            this.swingHand(Hand.MAIN_HAND);
+        }
+
+        BlockState state = this.getWorld().getBlockState(pos);
+        float hardness = state.getHardness(this.getWorld(), pos);
+
+        if (hardness < 0.0F) {
+            this.getWorld().setBlockBreakingInfo(this.getId(), pos, -1);
+            this.breakingPos = null;
+            return false;
+        }
+
+        this.breakingProgress += speedMultiplier / (hardness * 30.0F);
+
+        int stage = Math.min((int) (this.breakingProgress * 10.0F), 9);
+        this.getWorld().setBlockBreakingInfo(this.getId(), pos, stage);
+
+        if (this.breakingProgress >= 1.0F) {
+            this.getWorld().setBlockBreakingInfo(this.getId(), pos, -1);
+            this.breakingPos = null;
+            this.breakingProgress = 0f;
+            return true;
+        }
+
+        return false;
     }
 
     // ------------------------------------------------------------------
